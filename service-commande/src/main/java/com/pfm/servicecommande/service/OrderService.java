@@ -17,9 +17,15 @@ import java.util.stream.Collectors;
 public class OrderService {
 
     private final OrderRepository repository;
+    private final CatalogueClient catalogueClient; // From Step 2
+    private final StockClient stockClient;         // From Step 2
 
-    public OrderService(OrderRepository repository) {
+
+    public OrderService(OrderRepository repository,CatalogueClient catalogueClient,
+                        StockClient stockClient) {
         this.repository = repository;
+        this.catalogueClient = catalogueClient;
+        this.stockClient = stockClient;
     }
 
     public List<OrderDTO> getAllOrders() {
