@@ -35,6 +35,7 @@
         <module>service-catalogue</module>
         <module>service-commande</module>
         <module>service-stock</module>
+        <module>service-notification</module>
     </modules>
 
 </project>
