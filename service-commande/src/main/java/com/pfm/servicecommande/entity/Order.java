@@ -18,6 +18,17 @@ public class Order {
     private String statut; // ex: EN_ATTENTE, CONFIRMEE, ANNULEE
     private BigDecimal montantTotal;
 
+    @Column(unique = true)
+    private String idempotencyKey;
+
+    public String getIdempotencyKey() {
+        return idempotencyKey;
+    }
+
+    public void setIdempotencyKey(String idempotencyKey) {
+        this.idempotencyKey = idempotencyKey;
+    }
+
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<OrderLine> lines = new ArrayList<>();
 
