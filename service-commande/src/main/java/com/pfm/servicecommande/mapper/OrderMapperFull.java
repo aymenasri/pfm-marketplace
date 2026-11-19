@@ -28,7 +28,6 @@ public class OrderMapperFull {
         dto.setProductId(line.getProductId());
         dto.setQuantite(line.getQuantite());
         dto.setPrixUnitaire(line.getPrixUnitaire());
-        // Enriched fields will be populated in the Service via Feign
         return dto;
     }
 }

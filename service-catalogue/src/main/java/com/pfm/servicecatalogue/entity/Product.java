@@ -16,10 +16,8 @@ public class Product {
     private BigDecimal prix;
     private String categorie;
 
-    // Constructeur vide obligatoire pour JPA
     public Product() {}
 
-    // Getters et Setters (Génère-les avec Alt+Insert ou Cmd+N)
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public String getNom() { return nom; }

@@ -12,11 +12,8 @@ public class OrderLineDTO {
     @Positive(message = "La quantité doit être positive")
     private Integer quantite;
 
-    @NotNull(message = "Le prix unitaire est obligatoire")
-    @Positive(message = "Le prix unitaire doit être positif")
     private BigDecimal prixUnitaire;
 
-    // Getters et Setters
     public Long getProductId() { return productId; }
     public void setProductId(Long productId) { this.productId = productId; }
     public Integer getQuantite() { return quantite; }

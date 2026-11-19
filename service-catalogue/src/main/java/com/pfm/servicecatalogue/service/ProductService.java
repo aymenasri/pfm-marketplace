@@ -14,7 +14,6 @@ public class ProductService {
 
     private final ProductRepository repository;
 
-    // Injection par constructeur
     public ProductService(ProductRepository repository) {
         this.repository = repository;
     }
@@ -44,7 +43,6 @@ public class ProductService {
         repository.deleteById(id);
     }
 
-    // --- Méthodes de mapping ---
     private ProductDTO mapToDTO(Product entity) {
         ProductDTO dto = new ProductDTO();
         dto.setId(entity.getId());
