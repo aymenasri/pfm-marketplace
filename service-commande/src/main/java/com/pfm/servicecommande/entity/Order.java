@@ -15,7 +15,7 @@ public class Order {
 
     private String clientEmail;
     private LocalDateTime date;
-    private String statut; // ex: EN_ATTENTE, CONFIRMEE, ANNULEE
+    private String statut;
     private BigDecimal montantTotal;
 
     @Column(unique = true)
@@ -34,7 +34,6 @@ public class Order {
 
     public Order() {}
 
-    // Getters et Setters (Alt+Insert)
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public String getClientEmail() { return clientEmail; }

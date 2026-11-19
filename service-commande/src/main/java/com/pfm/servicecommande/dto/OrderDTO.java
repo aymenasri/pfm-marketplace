@@ -20,10 +20,9 @@ public class OrderDTO {
     private BigDecimal montantTotal;
 
     @NotEmpty(message = "La commande doit contenir au moins une ligne")
-    @Valid // Permet de valider les lignes à l'intérieur
+    @Valid
     private List<OrderLineDTO> lines;
 
-    // Getters et Setters
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public String getClientEmail() { return clientEmail; }

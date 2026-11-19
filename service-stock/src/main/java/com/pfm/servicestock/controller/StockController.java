@@ -29,6 +29,11 @@ public class StockController {
         return ResponseEntity.ok(service.getById(id));
     }
 
+    @GetMapping("/product/{productId}")
+    public ResponseEntity<StockDTO> getByProductId(@PathVariable Long productId) {
+        return ResponseEntity.ok(service.getByProductId(productId));
+    }
+
     @PostMapping
     public ResponseEntity<StockDTO> create(@Valid @RequestBody StockDTO dto) {
         return new ResponseEntity<>(service.create(dto), HttpStatus.CREATED);

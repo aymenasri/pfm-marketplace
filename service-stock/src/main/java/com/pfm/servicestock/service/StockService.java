@@ -28,6 +28,12 @@ public class StockService {
         return mapToDTO(stock);
     }
 
+    public StockDTO getByProductId(Long productId) {
+        Stock stock = repository.findByProductId(productId)
+                .orElseThrow(() -> new ResourceNotFoundException("Stock non trouvé pour le produit : " + productId));
+        return mapToDTO(stock);
+    }
+
     public StockDTO create(StockDTO dto) {
         Stock stock = new Stock();
         stock.setProductId(dto.getProductId());

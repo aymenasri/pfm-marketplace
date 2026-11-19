@@ -7,6 +7,10 @@ import com.pfm.servicecommande.dto.OrderLineDTOFull;
 import com.pfm.servicecommande.entity.Order;
 import com.pfm.servicecommande.entity.OrderLine;
 import com.pfm.servicecommande.exception.ResourceNotFoundException;
+import com.pfm.servicecommande.exception.BusinessRuleException;
+import com.pfm.servicecommande.exception.DownstreamServiceException;
+import com.pfm.servicecommande.dto.NotificationEmailDto;
+import com.pfm.servicecommande.config.RabbitConfig;
 import com.pfm.servicecommande.feignClient.CatalogueClient;
 import com.pfm.servicecommande.feignClient.StockClient;
 import com.pfm.servicecommande.feignClient.ProductDTO;
@@ -14,6 +18,11 @@ import com.pfm.servicecommande.feignClient.StockDTO;
 import com.pfm.servicecommande.mapper.OrderMapperFull;
 import com.pfm.servicecommande.repository.OrderRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.amqp.AmqpException;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import feign.FeignException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -22,21 +31,28 @@ import java.util.stream.Collectors;
 
 @Service
 public class OrderService {
+    private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
     private final OrderRepository repository;
     private final CatalogueClient catalogueClient;
     private final StockClient stockClient;
-    private final OrderMapperFull orderMapperFull; // Injected Mapper
+    private final OrderMapperFull orderMapperFull;
+    private final RabbitTemplate rabbitTemplate;
 
-    // Updated Constructor
     public OrderService(OrderRepository repository,
                         CatalogueClient catalogueClient,
                         StockClient stockClient,
-                        OrderMapperFull orderMapperFull) {
+                        OrderMapperFull orderMapperFull,
+                        RabbitTemplate rabbitTemplate) {
         this.repository = repository;
         this.catalogueClient = catalogueClient;
         this.stockClient = stockClient;
         this.orderMapperFull = orderMapperFull;
+        this.rabbitTemplate = rabbitTemplate;
+    }
+
+    public boolean isIdempotencyKeyProcessed(String idempotencyKey) {
+        return repository.findByIdempotencyKey(idempotencyKey).isPresent();
     }
 
     public List<OrderDTO> getAllOrders() {
@@ -49,15 +65,17 @@ public class OrderService {
         return mapToDTO(order);
     }
 
-    // --- CREATE LOGIC (With Feign checks) ---
-    public OrderDTO createOrder(OrderDTO dto, String idempotencyKey) {
+    public synchronized OrderDTO createOrder(OrderDTO dto, String idempotencyKey) {
 
-        // 1. Check Idempotency
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new IllegalArgumentException("Clé d'idempotence manquante");
         }
-        if (repository.findByIdempotencyKey(idempotencyKey).isPresent()) {
-            throw new IllegalArgumentException("Opération déjà traitée avec cette clé");
+        var existing = repository.findByIdempotencyKey(idempotencyKey);
+        if (existing.isPresent()) {
+            return mapToDTO(existing.get());
+        }
+        if (dto.getLines() == null || dto.getLines().isEmpty()) {
+            throw new BusinessRuleException("La commande doit contenir au moins une ligne");
         }
 
         Order order = new Order();
@@ -69,66 +87,93 @@ public class OrderService {
         BigDecimal total = BigDecimal.ZERO;
 
         for (OrderLineDTO lineDto : dto.getLines()) {
-
-            // 2. Call Stock Service
-            StockDTO stock = stockClient.getStockByProductId(lineDto.getProductId());
-            // Note: Adjust getQuantite() if your StockDTO uses a different name (e.g., getQteStock())
+            StockDTO stock = getStock(lineDto.getProductId());
             if (stock == null || stock.getQuantite() < lineDto.getQuantite()) {
-                throw new IllegalArgumentException("Stock insuffisant pour le produit ID: " + lineDto.getProductId());
+                throw new BusinessRuleException("Stock insuffisant pour le produit ID: " + lineDto.getProductId());
             }
 
-            // 3. Call Catalogue Service
-            ProductDTO product = catalogueClient.getProductById(lineDto.getProductId());
+            ProductDTO product = getProduct(lineDto.getProductId());
             if (product == null) {
-                throw new IllegalArgumentException("Produit introuvable ID: " + lineDto.getProductId());
+                throw new ResourceNotFoundException("Produit introuvable ID: " + lineDto.getProductId());
             }
 
-            // 4. Create the line
             OrderLine line = new OrderLine();
             line.setProductId(lineDto.getProductId());
             line.setQuantite(lineDto.getQuantite());
 
-            // Use price from Catalogue
             BigDecimal realPrice = product.getPrix();
             line.setPrixUnitaire(realPrice);
             line.setOrder(order);
             order.getLines().add(line);
 
-            // Calculate total
             total = total.add(realPrice.multiply(new BigDecimal(lineDto.getQuantite())));
         }
 
         order.setMontantTotal(total);
         Order saved = repository.save(order);
+        publishOrderNotification(saved);
         return mapToDTO(saved);
     }
 
-    // --- ENRICHED GET LOGIC (For /detail endpoint) ---
     public OrderDTOFull getOrderFullById(Long id) {
-        // 1. Load local order
         Order order = repository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Commande non trouvée avec l'id : " + id));
 
-        // 2. Map to Full DTO using the mapper
         OrderDTOFull dtoFull = orderMapperFull.toDto(order);
 
-        // 3. Enrich with Feign (Catalogue Service)
         for (OrderLineDTOFull line : dtoFull.getLines()) {
-            try {
-                ProductDTO product = catalogueClient.getProductById(line.getProductId());
-                if (product != null) {
-                    line.setProduitNom(product.getNom());
-                    line.setProduitDescription(product.getDescription());
-                }
-            } catch (Exception e) {
-                // Fallback if catalogue service is down
-                line.setProduitNom("Produit Inconnu (Service Catalogue indisponible)");
-            }
+            ProductDTO product = getProduct(line.getProductId());
+            line.setProduitNom(product.getNom());
+            line.setProduitDescription(product.getDescription());
+            StockDTO stock = getStock(line.getProductId());
+            line.setSousTotal(line.getPrixUnitaire()
+                    .multiply(BigDecimal.valueOf(line.getQuantite())));
         }
         return dtoFull;
     }
 
-    // --- BASIC MAPPER (For normal endpoints) ---
+    private ProductDTO getProduct(Long productId) {
+        try {
+            ProductDTO product = catalogueClient.getProductById(productId);
+            if (product == null) {
+                throw new ResourceNotFoundException("Produit introuvable ID: " + productId);
+            }
+            return product;
+        } catch (FeignException.NotFound e) {
+            throw new ResourceNotFoundException("Produit introuvable ID: " + productId);
+        } catch (FeignException e) {
+            throw new DownstreamServiceException("Service catalogue indisponible");
+        }
+    }
+
+    private StockDTO getStock(Long productId) {
+        try {
+            StockDTO stock = stockClient.getStockByProductId(productId);
+            if (stock == null) {
+                throw new ResourceNotFoundException("Stock introuvable pour le produit ID: " + productId);
+            }
+            return stock;
+        } catch (FeignException.NotFound e) {
+            throw new ResourceNotFoundException("Stock introuvable pour le produit ID: " + productId);
+        } catch (FeignException e) {
+            throw new DownstreamServiceException("Service stock indisponible");
+        }
+    }
+
+    private void publishOrderNotification(Order order) {
+        NotificationEmailDto notification = new NotificationEmailDto(
+                order.getClientEmail(),
+                "Confirmation de votre commande #" + order.getId(),
+                "Votre commande #" + order.getId()
+                        + " d'un montant de " + order.getMontantTotal()
+                        + " a été enregistrée.");
+        try {
+            rabbitTemplate.convertAndSend(RabbitConfig.QUEUE_EMAIL, notification);
+        } catch (AmqpException e) {
+            log.error("Commande {} enregistrée mais notification non publiée", order.getId(), e);
+        }
+    }
+
     private OrderDTO mapToDTO(Order entity) {
         OrderDTO dto = new OrderDTO();
         dto.setId(entity.getId());

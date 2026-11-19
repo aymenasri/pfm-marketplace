@@ -32,12 +32,12 @@ public class ProductController {
     @PostMapping
     public ResponseEntity<ProductDTO> create(@Valid @RequestBody ProductDTO dto) {
         ProductDTO created = service.createProduct(dto);
-        return new ResponseEntity<>(created, HttpStatus.CREATED); // 201 Created
+        return new ResponseEntity<>(created, HttpStatus.CREATED);
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         service.deleteProduct(id);
-        return ResponseEntity.noContent().build(); // 204 No Content
+        return ResponseEntity.noContent().build();
     }
 }
