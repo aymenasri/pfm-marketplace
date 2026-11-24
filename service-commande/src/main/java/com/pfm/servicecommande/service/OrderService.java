@@ -4,25 +4,28 @@ import com.pfm.servicecommande.dto.OrderDTO;
 import com.pfm.servicecommande.dto.OrderDTOFull;
 import com.pfm.servicecommande.dto.OrderLineDTO;
 import com.pfm.servicecommande.dto.OrderLineDTOFull;
+import com.pfm.servicecommande.dto.NotificationEmailDto;
 import com.pfm.servicecommande.entity.Order;
 import com.pfm.servicecommande.entity.OrderLine;
-import com.pfm.servicecommande.exception.ResourceNotFoundException;
-import com.pfm.servicecommande.exception.BusinessRuleException;
-import com.pfm.servicecommande.exception.DownstreamServiceException;
-import com.pfm.servicecommande.dto.NotificationEmailDto;
 import com.pfm.servicecommande.config.RabbitConfig;
+import com.pfm.servicecommande.exception.BusinessRuleException;
+import com.pfm.servicecommande.exception.ResourceNotFoundException;
+import com.pfm.servicecommande.exception.DownstreamServiceException;
 import com.pfm.servicecommande.feignClient.CatalogueClient;
 import com.pfm.servicecommande.feignClient.StockClient;
 import com.pfm.servicecommande.feignClient.ProductDTO;
 import com.pfm.servicecommande.feignClient.StockDTO;
 import com.pfm.servicecommande.mapper.OrderMapperFull;
 import com.pfm.servicecommande.repository.OrderRepository;
-import org.springframework.stereotype.Service;
-import org.springframework.amqp.AmqpException;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import feign.FeignException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.amqp.AmqpException;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -65,6 +68,7 @@ public class OrderService {
         return mapToDTO(order);
     }
 
+    @Transactional
     public synchronized OrderDTO createOrder(OrderDTO dto, String idempotencyKey) {
 
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
@@ -111,7 +115,7 @@ public class OrderService {
 
         order.setMontantTotal(total);
         Order saved = repository.save(order);
-        publishOrderNotification(saved);
+        scheduleOrderNotification(saved);
         return mapToDTO(saved);
     }
 
@@ -160,18 +164,24 @@ public class OrderService {
         }
     }
 
-    private void publishOrderNotification(Order order) {
+    private void scheduleOrderNotification(Order order) {
         NotificationEmailDto notification = new NotificationEmailDto(
                 order.getClientEmail(),
                 "Confirmation de votre commande #" + order.getId(),
                 "Votre commande #" + order.getId()
                         + " d'un montant de " + order.getMontantTotal()
                         + " a été enregistrée.");
-        try {
-            rabbitTemplate.convertAndSend(RabbitConfig.QUEUE_EMAIL, notification);
-        } catch (AmqpException e) {
-            log.error("Commande {} enregistrée mais notification non publiée", order.getId(), e);
-        }
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    rabbitTemplate.convertAndSend(RabbitConfig.QUEUE_EMAIL, notification);
+                } catch (AmqpException e) {
+                    log.error("Commande {} enregistrée mais notification non publiée", order.getId(), e);
+                }
+            }
+        });
     }
 
     private OrderDTO mapToDTO(Order entity) {
