@@ -1,2 +1,2 @@
-MERGE INTO product (id, nom, description, prix) KEY(id) VALUES (1, 'Laptop HP', 'Un ordinateur portable', 1200.00);
-MERGE INTO product (id, nom, description, prix) KEY(id) VALUES (2, 'Souris Logitech', 'Souris sans fil', 25.00);
+INSERT INTO products (id, nom, description, prix, categorie) VALUES (1, 'Laptop HP', 'Un ordinateur portable', 1200.00, 'Electronique');
+INSERT INTO products (id, nom, description, prix, categorie) VALUES (2, 'Souris Logitech', 'Souris sans fil', 25.00, 'Accessoires');

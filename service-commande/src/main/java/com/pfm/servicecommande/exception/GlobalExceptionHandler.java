@@ -53,4 +53,9 @@ public class GlobalExceptionHandler {
         response.put("erreur", message);
         return response;
     }
+
+    @ExceptionHandler(ServiceExterneIndisponibleException.class)
+    public ResponseEntity<String> serviceExterneIndisponible(ServiceExterneIndisponibleException ex) {
+        return ResponseEntity.status(503).body(ex.getMessage());
+    }
 }

@@ -8,19 +8,21 @@ import com.pfm.servicecommande.entity.Order;
 import com.pfm.servicecommande.entity.OrderLine;
 import com.pfm.servicecommande.exception.ResourceNotFoundException;
 import com.pfm.servicecommande.exception.BusinessRuleException;
-import com.pfm.servicecommande.exception.DownstreamServiceException;
 import com.pfm.servicecommande.dto.NotificationEmailDto;
 import com.pfm.servicecommande.config.RabbitConfig;
-import com.pfm.servicecommande.feignClient.CatalogueClient;
-import com.pfm.servicecommande.feignClient.StockClient;
 import com.pfm.servicecommande.feignClient.ProductDTO;
+import com.pfm.servicecommande.feignClient.ResilientRequests;
 import com.pfm.servicecommande.feignClient.StockDTO;
 import com.pfm.servicecommande.mapper.OrderMapperFull;
 import com.pfm.servicecommande.repository.OrderRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import feign.FeignException;
+import org.springframework.transaction.annotation.Transactional;
+
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,19 +36,16 @@ public class OrderService {
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
     private final OrderRepository repository;
-    private final CatalogueClient catalogueClient;
-    private final StockClient stockClient;
+    private final ResilientRequests resilientRequests; // Replaced Clients
     private final OrderMapperFull orderMapperFull;
     private final RabbitTemplate rabbitTemplate;
 
     public OrderService(OrderRepository repository,
-                        CatalogueClient catalogueClient,
-                        StockClient stockClient,
+                        ResilientRequests resilientRequests, // Replaced Clients
                         OrderMapperFull orderMapperFull,
                         RabbitTemplate rabbitTemplate) {
         this.repository = repository;
-        this.catalogueClient = catalogueClient;
-        this.stockClient = stockClient;
+        this.resilientRequests = resilientRequests;
         this.orderMapperFull = orderMapperFull;
         this.rabbitTemplate = rabbitTemplate;
     }
@@ -87,12 +86,13 @@ public class OrderService {
         BigDecimal total = BigDecimal.ZERO;
 
         for (OrderLineDTO lineDto : dto.getLines()) {
-            StockDTO stock = getStock(lineDto.getProductId());
+            // STRICT METHODS FOR CREATION
+            StockDTO stock = resilientRequests.getStockByIdStrict(lineDto.getProductId());
             if (stock == null || stock.getQuantite() < lineDto.getQuantite()) {
                 throw new BusinessRuleException("Stock insuffisant pour le produit ID: " + lineDto.getProductId());
             }
 
-            ProductDTO product = getProduct(lineDto.getProductId());
+            ProductDTO product = resilientRequests.getProduitByIdStrict(lineDto.getProductId());
             if (product == null) {
                 throw new ResourceNotFoundException("Produit introuvable ID: " + lineDto.getProductId());
             }
@@ -115,6 +115,9 @@ public class OrderService {
         return mapToDTO(saved);
     }
 
+    // ADDED RATE LIMITER HERE
+    @RateLimiter(name = "consultation", fallbackMethod = "consultationLimitee")
+    @Transactional(readOnly = true)
     public OrderDTOFull getOrderFullById(Long id) {
         Order order = repository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Commande non trouvée avec l'id : " + id));
@@ -122,42 +125,27 @@ public class OrderService {
         OrderDTOFull dtoFull = orderMapperFull.toDto(order);
 
         for (OrderLineDTOFull line : dtoFull.getLines()) {
-            ProductDTO product = getProduct(line.getProductId());
-            line.setProduitNom(product.getNom());
-            line.setProduitDescription(product.getDescription());
-            StockDTO stock = getStock(line.getProductId());
+            // FALLBACK METHODS FOR READING (FB)
+            ProductDTO product = resilientRequests.getProduitByIdFb(line.getProductId());
+            if (product != null) {
+                line.setProduitNom(product.getNom());
+                line.setProduitDescription(product.getDescription());
+            }
+
+            StockDTO stock = resilientRequests.getStockByIdFb(line.getProductId());
+
             line.setSousTotal(line.getPrixUnitaire()
                     .multiply(BigDecimal.valueOf(line.getQuantite())));
         }
         return dtoFull;
     }
 
-    private ProductDTO getProduct(Long productId) {
-        try {
-            ProductDTO product = catalogueClient.getProductById(productId);
-            if (product == null) {
-                throw new ResourceNotFoundException("Produit introuvable ID: " + productId);
-            }
-            return product;
-        } catch (FeignException.NotFound e) {
-            throw new ResourceNotFoundException("Produit introuvable ID: " + productId);
-        } catch (FeignException e) {
-            throw new DownstreamServiceException("Service catalogue indisponible");
-        }
-    }
-
-    private StockDTO getStock(Long productId) {
-        try {
-            StockDTO stock = stockClient.getStockByProductId(productId);
-            if (stock == null) {
-                throw new ResourceNotFoundException("Stock introuvable pour le produit ID: " + productId);
-            }
-            return stock;
-        } catch (FeignException.NotFound e) {
-            throw new ResourceNotFoundException("Stock introuvable pour le produit ID: " + productId);
-        } catch (FeignException e) {
-            throw new DownstreamServiceException("Service stock indisponible");
-        }
+    // FALLBACK FOR RATE LIMITER
+    public OrderDTOFull consultationLimitee(Long id, RequestNotPermitted cause) {
+        log.warn("Rate limit reached for enriched consultation. Returning local data only.");
+        Order order = repository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Commande non trouvée avec l'id : " + id));
+        return orderMapperFull.toDto(order); // Returns without enriching
     }
 
     private void publishOrderNotification(Order order) {

@@ -1,6 +1,0 @@
-CREATE TABLE IF NOT EXISTS product (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    nom VARCHAR(255),
-    description VARCHAR(255),
-    prix DECIMAL(10,2)
-    );
