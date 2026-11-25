@@ -11,7 +11,6 @@ import com.pfm.servicecommande.config.RabbitConfig;
 import com.pfm.servicecommande.exception.BusinessRuleException;
 import com.pfm.servicecommande.exception.ResourceNotFoundException;
 import com.pfm.servicecommande.exception.DownstreamServiceException;
-import com.pfm.servicecommande.feignClient.CatalogueClient;
 import com.pfm.servicecommande.feignClient.StockClient;
 import com.pfm.servicecommande.feignClient.ProductDTO;
 import com.pfm.servicecommande.feignClient.StockDTO;
@@ -37,18 +36,18 @@ public class OrderService {
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
     private final OrderRepository repository;
-    private final CatalogueClient catalogueClient;
+    private final CatalogueProductService catalogueProductService;
     private final StockClient stockClient;
     private final OrderMapperFull orderMapperFull;
     private final RabbitTemplate rabbitTemplate;
 
     public OrderService(OrderRepository repository,
-                        CatalogueClient catalogueClient,
+                        CatalogueProductService catalogueProductService,
                         StockClient stockClient,
                         OrderMapperFull orderMapperFull,
                         RabbitTemplate rabbitTemplate) {
         this.repository = repository;
-        this.catalogueClient = catalogueClient;
+        this.catalogueProductService = catalogueProductService;
         this.stockClient = stockClient;
         this.orderMapperFull = orderMapperFull;
         this.rabbitTemplate = rabbitTemplate;
@@ -96,7 +95,7 @@ public class OrderService {
                 throw new BusinessRuleException("Stock insuffisant pour le produit ID: " + lineDto.getProductId());
             }
 
-            ProductDTO product = getProduct(lineDto.getProductId());
+            ProductDTO product = catalogueProductService.getForOrder(lineDto.getProductId());
             if (product == null) {
                 throw new ResourceNotFoundException("Produit introuvable ID: " + lineDto.getProductId());
             }
@@ -126,7 +125,7 @@ public class OrderService {
         OrderDTOFull dtoFull = orderMapperFull.toDto(order);
 
         for (OrderLineDTOFull line : dtoFull.getLines()) {
-            ProductDTO product = getProduct(line.getProductId());
+            ProductDTO product = catalogueProductService.getForRead(line.getProductId());
             line.setProduitNom(product.getNom());
             line.setProduitDescription(product.getDescription());
             StockDTO stock = getStock(line.getProductId());
@@ -134,20 +133,6 @@ public class OrderService {
                     .multiply(BigDecimal.valueOf(line.getQuantite())));
         }
         return dtoFull;
-    }
-
-    private ProductDTO getProduct(Long productId) {
-        try {
-            ProductDTO product = catalogueClient.getProductById(productId);
-            if (product == null) {
-                throw new ResourceNotFoundException("Produit introuvable ID: " + productId);
-            }
-            return product;
-        } catch (FeignException.NotFound e) {
-            throw new ResourceNotFoundException("Produit introuvable ID: " + productId);
-        } catch (FeignException e) {
-            throw new DownstreamServiceException("Service catalogue indisponible");
-        }
     }
 
     private StockDTO getStock(Long productId) {
