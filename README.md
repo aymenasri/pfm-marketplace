@@ -17,34 +17,7 @@ ainsi que l'envoi asynchrone d'une notification après la création d'une comman
 - Un conteneur PostgreSQL héberge trois bases logiques : `pfm_catalogue`,
   `pfm_stock` et `pfm_commandes`. Le service Notification n'a pas de base.
 
-```mermaid
-flowchart LR
-    client[Client / Postman] --> gateway[API Gateway<br/>8080]
-    gateway -->|/api/products| catalogue[Service Catalogue<br/>8081]
-    gateway -->|/api/orders| commande[Service Commande<br/>8082]
-    gateway -->|/api/stocks| stock[Service Stock<br/>8083]
-
-    commande -->|Feign GET : prix, Retry, Circuit Breaker et timeout| catalogue
-    commande -->|Feign GET : stock, Retry, Circuit Breaker et timeout| stock
-    commande -->|Après commit : message JSON| queue[(RabbitMQ<br/>notifications.email)]
-    queue --> notification[Service Notification<br/>8084]
-    notification -->|SMTP : 1025| mailpit[Mailpit<br/>interface : 8025]
-
-    catalogue -->|JPA| postgres[(PostgreSQL : 5433<br/>pfm_catalogue<br/>pfm_stock<br/>pfm_commandes)]
-    stock -->|JPA| postgres
-    commande -->|JPA| postgres
-
-    catalogue -. Configuration .-> config[Config Server<br/>8888]
-    commande -. Configuration .-> config
-    stock -. Configuration .-> config
-    notification -. Configuration .-> config
-    gateway -. Configuration .-> config
-    gateway -. Enregistrement et découverte .-> eureka[Eureka<br/>8761]
-    catalogue -. Enregistrement .-> eureka
-    commande -. Enregistrement .-> eureka
-    stock -. Enregistrement .-> eureka
-    notification -. Enregistrement .-> eureka
-```
+![Diagramme d’architecture](<./architecture diagram.png>)
 
 Les appels Feign sont synchrones : la commande attend les réponses du Catalogue
 et du Stock pour être validée. La notification est asynchrone : elle est envoyée
@@ -58,39 +31,7 @@ Une commande contient ses lignes. `productId` relie une ligne de commande et
 une entrée de stock à un produit par identifiant ; ce ne sont pas des relations
 JPA entre les bases des différents services.
 
-```mermaid
-classDiagram
-    class Commande {
-        Long id
-        String clientEmail
-        LocalDateTime date
-        String statut
-        BigDecimal montantTotal
-        String idempotencyKey
-    }
-    class LigneCommande {
-        Long id
-        Long productId
-        Integer quantite
-        BigDecimal prixUnitaire
-    }
-    class Produit {
-        Long id
-        String nom
-        String description
-        BigDecimal prix
-        String categorie
-    }
-    class Stock {
-        Long id
-        Long productId
-        Integer quantite
-        Integer seuilAlerte
-    }
-    Commande "1" *-- "0..*" LigneCommande : contient
-    LigneCommande ..> Produit : référence par productId
-    Stock ..> Produit : référence par productId
-```
+![Diagramme de classes métier](<./class diagram.png>)
 
 ## Technologies et ports
 
